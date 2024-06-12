@@ -179,4 +179,4 @@ and you would like to keep a backup of certain files (e.g. ``*.h5``) in
 
             shelephant_diff containerinfo.yaml localinfo.yaml
 
-        (You can also use ``shelephant_cp`` to copy. In that case the copy-plan can be based purely on *sha256*.)
+        (You can also use ``shelephant_cp`` to copy. In that case the copy-plan can be based purely on *sha256* if you set ``--mode=sha256``.)

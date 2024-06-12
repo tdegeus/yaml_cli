@@ -9,7 +9,6 @@ import textwrap
 
 import click
 import numpy as np
-import prettytable
 
 from . import dataset
 from . import local
@@ -386,6 +385,7 @@ def shelephant_cp(args: list[str], paths: list[str] = None, filter_paths: bool =
     if suffix_source != pathlib.Path(""):
         files = [os.path.relpath(p, suffix_source) for p in files]
 
+    # interaction not directly with command-line
     if len(paths) > 0:
         if (common_prefix / deepest) != pathlib.Path(""):
             strip = common_prefix / deepest
@@ -704,7 +704,17 @@ def _shelephant_diff_parser():
             shelephant_diff <sourceinfo.yaml> <destinfo.yaml> --filter "?=, !="
             shelephant_diff <sourceinfo.yaml> <destinfo.yaml> -o <diff.yaml>
 
-        Note that if filter contains only one operation the output YAML-file will be a list.
+        .. note::
+
+            ``--filter`` allows to output only a limited number of directions.
+            For convenience, and to bypass syntax limitations, the following aliases are available:
+
+            -   ``<``: ``<-``
+            -   ``>``: ``->``
+            -   ``!``: ``!=``
+            -   ``~``: ``!=``
+            -   ``?``: ``?=``
+            -   ``=``: ``==``
         """
     )
 
@@ -723,14 +733,13 @@ def _shelephant_diff_parser():
     parser.add_argument(
         "--mode", type=str, help="Use 'sha256', 'rsync', or 'basic'.", default="sha256"
     )
-    parser.add_argument("--sort", type=str, help="Sort printed table by column.")
-    parser.add_argument("--table", type=str, default="SINGLE_BORDER", help="Select print style.")
-    parser.add_argument("--filter", type=str, help="Filter to direction (separated by ',').")
-    parser.add_argument("-o", "--output", type=pathlib.Path, help="Dump as YAML file.")
-    parser.add_argument("-f", "--force", action="store_true", help="Force overwrite output.")
+    parser.add_argument("--list", action="store_true", help="Output list instead of dictionary")
+    parser.add_argument("--filter", type=str, help="Filter to directions separated by ','")
+    parser.add_argument("-o", "--output", type=pathlib.Path, help="Dump as YAML file")
+    parser.add_argument("-f", "--force", action="store_true", help="Force overwrite output file")
     parser.add_argument("--version", action="version", version=version)
-    parser.add_argument("source", type=pathlib.Path, help="Source information.")
-    parser.add_argument("dest", type=pathlib.Path, help="Destination directory/information.")
+    parser.add_argument("source", type=pathlib.Path, help="Source information")
+    parser.add_argument("dest", type=pathlib.Path, help="Destination directory/information")
     return parser
 
 
@@ -748,29 +757,32 @@ def shelephant_diff(args: list[str]):
     assert len(args.mode) == 1, "Only one mode allowed."
     assert shutil.which("rsync") is not None or "rsync" not in args.mode, "rsync not available."
 
-    source = dataset.Location.from_yaml(args.source)
-    files = source.files(info=False)
-
     if args.dest.is_file():
         dest = dataset.Location.from_yaml(args.dest)
     else:
         dest = dataset.Location(root=args.dest, ssh=args.ssh)
 
+    source = dataset.Location.from_yaml(args.source)
+
     if "sha256" in args.mode:
         status = source.diff(dest)
     elif "rsync" in args.mode:
         left = source.diff(dest)["<-"]
+        files = source.files(info=False)
         [files.remove(file) for file in left]
         status = rsync.diff(source.hostpath, dest.hostpath, files)
         status["<-"] = left
     elif "basic" in args.mode:
         assert source.ssh is None and dest.ssh is None, "Use 'rsync' or 'sha256' mode with SSH."
-        status = local.diff(source.hostpath, dest.hostpath, files)
+        status = local.diff(source.hostpath, dest.hostpath, source.files(info=False))
     else:
         raise ValueError(f"Unknown mode '{args.mode}'.")
 
     if args.filter:
-        keys = [key.strip() for key in args.filter.split(",")]
+        alias = {">": "->", "<": "<-", "!": "!=", "~": "!=", "?": "?=", "=": "=="}
+        alias = {**alias, **{v: v for v in alias.values()}}
+        filters = [alias[i.strip()] for i in args.filter.split(",")]
+        keys = [key.strip() for key in filters]
         keys = [key for key in keys if key in status]
         status = {key: status[key] for key in keys}
 
@@ -778,43 +790,15 @@ def shelephant_diff(args: list[str]):
         if len(status[key]) == 0:
             del status[key]
 
+    if args.list:
+        assert len(status) == 1, "--list output only works if only one direction is selected."
+        status = status[list(status.keys())[0]]
+
     if args.output:
-        if len(status) == 1:
-            status = status[list(status.keys())[0]]
         yaml.dump(args.output, status, force=args.force)
         return
 
-    out = prettytable.PrettyTable()
-    if args.table == "PLAIN_COLUMNS":
-        out.set_style(prettytable.PLAIN_COLUMNS)
-    elif args.table == "SINGLE_BORDER":
-        out.set_style(prettytable.SINGLE_BORDER)
-    out.field_names = ["source", "sync", "dest"]
-    out.align["source"] = "l"
-    out.align["sync"] = "c"
-    out.align["dest"] = "l"
-
-    left = status.pop("->", [])
-    right = status.pop("<-", [])
-    equal = status.pop("==", [])
-
-    for key in status:
-        for item in status[key]:
-            out.add_row([item, key, item])
-
-    for item in left:
-        out.add_row([item, "->", ""])
-
-    for item in right:
-        out.add_row(["", "<-", item])
-
-    for item in equal:
-        out.add_row([item, "==", item])
-
-    if args.sort is None:
-        print(out.get_string())
-    else:
-        print(out.get_string(sortby=args.sort))
+    output.diff(status, colors=args.colors)
 
 
 def _shelephant_main_parser():

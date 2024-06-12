@@ -192,6 +192,13 @@ def diff(
     color = _theme(colors.lower())
     sio = io.StringIO()
 
+    if isinstance(status, list):
+        sio.write("\n".join(status))
+        if not display:
+            return sio.getvalue()
+        else:
+            autoprint(sio.getvalue())
+
     skip = status.pop("==", [])
     right = status.pop("->", [])
     left = status.pop("<-", [])
@@ -256,5 +263,5 @@ def diff(
 
     if not display:
         return sio.getvalue()
-
-    autoprint(sio.getvalue())
+    else:
+        autoprint(sio.getvalue())

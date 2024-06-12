@@ -684,7 +684,7 @@ class Test_shelephant_diff(unittest.TestCase):
                 shelephant_dump(["-i"] + files)
                 shelephant_hostinfo(["../dest", "-d", "--info"])
                 args = [f_dump, f_hostinfo]
-                shelephant_diff(args + ["-o", "foo.yaml", "--filter", "<-"])
+                shelephant_diff(args + ["-o", "foo.yaml", "--filter", "<-", "--list"])
                 data = shelephant.yaml.read("foo.yaml")
 
         self.assertEqual(data, ["receive.txt"])
@@ -698,27 +698,28 @@ class Test_shelephant_diff(unittest.TestCase):
             pathlib.Path("dest").mkdir()
 
             with cwd("dest"):
-                create_dummy_files(["foo.txt"])
-                create_dummy_files(["bar.txt"], keep=slice(2, None, None))
-                create_dummy_files(["receive.txt"], keep=slice(6, None, None))
-                shelephant_dump(["-i", "foo.txt", "bar.txt", "receive.txt"])
+                files = ["foo.txt", "bar.txt", "receive.txt"]
+                create_dummy_files([files[0]])
+                create_dummy_files([files[1]], keep=slice(2, None, None))
+                create_dummy_files([files[2]], keep=slice(6, None, None))
+                shelephant_dump(["-i"] + files)
 
             with cwd("src"):
                 files = ["foo.txt", "bar.txt", "more.txt", "even_more.txt"]
                 create_dummy_files(files)
                 shelephant_dump(["-i"] + files)
                 shelephant_hostinfo(["../dest", "-d"])
-                shelephant_diff([f_dump, f_hostinfo, "--table", "PLAIN_COLUMNS"])
+                shelephant_diff([f_dump, f_hostinfo, "--colors", "none"])
 
         expect = [
             "bar.txt != bar.txt",
-            "even_more.txt ->",
-            "more.txt ->",
-            "<- receive.txt",
+            "receive.txt <- receive.txt",
+            "even_more.txt -> even_more.txt",
+            "more.txt -> more.txt",
             "foo.txt == foo.txt",
         ]
 
-        ret = _plain(sio.getvalue())[1:]
+        ret = _plain(sio.getvalue())
         self.assertEqual(ret, expect)
 
 

@@ -50,7 +50,6 @@ def copy(
             cmd = 'rsync {options:s} --files-from="{files:s}" "{src:s}" "{dest:s}"'.format(
                 options=options, src=str(source_dir), dest=str(dest_dir), files=temp_file
             )
-
             return exec_cmd(cmd, verbose)
 
         # Run while printing output
