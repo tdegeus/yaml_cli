@@ -1924,6 +1924,9 @@ def _status_parser():
     parser = argparse.ArgumentParser(formatter_class=MyFmt, description=desc)
 
     parser.add_argument("--version", action="version", version=version)
+    parser.add_argument("--size", action="store_true", help="Show size of files.")
+    parser.add_argument("--reverse", action="store_true", help="Reverse output order.")
+    parser.add_argument("--sort", type=str, help="Sort by 'size' or 'in use'.")
     parser.add_argument("--min-copies", type=int, help="Show files with minimal number of copies.")
     parser.add_argument("--copies", type=int, help="Show files with specific number of copies.")
     parser.add_argument("--ne", action="store_true", help="Show files with unequal copies.")
@@ -1963,6 +1966,15 @@ def _status_parser():
     return parser
 
 
+# https://stackoverflow.com/a/1094933/2646505
+def sizeof_fmt(num, suffix=""):
+    for unit in ("", "K", "M", "G", "T", "P", "E", "Z"):
+        if abs(num) < 1e3:
+            return f"{num:.0f}{unit}{suffix}"
+        num /= 1e3
+    return f"{num:.1f}Y{suffix}"
+
+
 def status(args: list[str]):
     """
     Command-line tool, see ``--help``.
@@ -1983,6 +1995,7 @@ def status(args: list[str]):
         if args.in_use == "none":
             args.in_use = na
 
+    formatter = np.vectorize(sizeof_fmt)
     with mypathlib.cwd(sdir):
         symlinks = np.sort([i["path"] for i in yaml.read("symlinks.yaml", [])])
         storage = yaml.read(sdir / "storage.yaml")
@@ -1992,6 +2005,7 @@ def status(args: list[str]):
         sha = "x" * np.ones((len(symlinks), len(storage)), dtype=object)
         mtime = np.inf * np.ones(sha.shape, dtype=np.float64)
         inuse = na * np.ones((len(symlinks)), dtype=object)
+        filesize = np.zeros((len(symlinks)), dtype=object)
 
         for iname, name in enumerate(storage[::-1]):
             loc = Location.from_yaml(pathlib.Path("storage") / f"{name}.yaml")
@@ -2003,12 +2017,15 @@ def status(args: list[str]):
             idx = np.searchsorted(symlinks, files[sorter])
             s = np.array(loc._sha256)[sorter]
             m = np.array(loc._mtime)[sorter]
+            f = np.array(loc._size, dtype=object)[sorter]
             h = ~loc._has_info[sorter]
             if np.any(h):
                 s[h] = "?"
                 m[h] = np.inf
+                f[h] = "?"
             sha[idx, -1 - iname] = s
             mtime[idx, -1 - iname] = m
+            filesize[idx] = f
             if loc.isavailable(mount=True):
                 inuse[idx] = name
 
@@ -2034,11 +2051,12 @@ def status(args: list[str]):
         _sha[info] = np.array(list(map(str, label)), dtype=object)
         sha[i, :] = _sha
 
-    data = np.hstack((np.array([symlinks]).T, inuse.reshape(-1, 1), sha))
+    data = np.hstack((np.array([symlinks]).T, filesize.reshape(-1, 1), inuse.reshape(-1, 1), sha))
 
     e = "?" * np.ones((len(extra), data.shape[1]), dtype=object)
     e[:, 0] = extra
     e[:, 1] = "here"
+    e[:, 2] = "?"
     data = np.vstack((data, e))
 
     if args.not_on is not None:
@@ -2051,24 +2069,24 @@ def status(args: list[str]):
         keep = np.zeros((len(data)), dtype=bool)
         for name in args.on:
             if name == "here":
-                keep = np.logical_or(keep, data[:, 1] == "here")
+                keep = np.logical_or(keep, data[:, 2] == "here")
             else:
                 iname = -(len(storage) - np.argmax(np.equal(storage, name)))
                 keep = np.logical_or(keep, np.not_equal(data[:, iname], "x"))
         data = data[keep, :]
 
     if args.min_copies is not None:
-        data = data[np.sum(data[:, 2:] == "==", axis=1) >= args.min_copies]
+        data = data[np.sum(data[:, 3:] == "==", axis=1) >= args.min_copies]
     if args.copies is not None:
-        data = data[np.sum(data[:, 2:] == "==", axis=1) == args.copies]
+        data = data[np.sum(data[:, 3:] == "==", axis=1) == args.copies]
     if args.ne:
-        data = data[np.sum(data[:, 2:] == "1", axis=1) > 0]
+        data = data[np.sum(data[:, 3:] == "1", axis=1) > 0]
     if args.na:
-        data = data[np.sum(data[:, 2:] == "x", axis=1) > 0]
+        data = data[np.sum(data[:, 3:] == "x", axis=1) > 0]
     if args.unknown:
-        data = data[np.sum(data[:, 2:] == "?=", axis=1) > 0]
+        data = data[np.sum(data[:, 3:] == "?=", axis=1) > 0]
     if args.in_use is not None:
-        data = data[data[:, 1] == args.in_use]
+        data = data[data[:, 2] == args.in_use]
 
     if len(paths) > 0:
         keep = np.zeros(data.shape[0], dtype=bool)
@@ -2084,6 +2102,18 @@ def status(args: list[str]):
     if args.nout is not None:
         data = data[: args.nout, ...]
 
+    if args.sort is not None:
+        if args.sort.lower() == "size":
+            idx = 1
+        elif args.sort.lower() == "in use":
+            idx = 2
+        else:
+            raise ValueError(f"Unknown sort option: {args.sort}")
+        data = data[np.argsort(data[:, idx])]
+
+    if args.reverse:
+        data = data[::-1]
+
     if args.print0:
         print("\0".join(data[:, 0]))
         return
@@ -2098,10 +2128,19 @@ def status(args: list[str]):
     elif args.table == "SINGLE_BORDER":
         out.set_style(prettytable.SINGLE_BORDER)
 
-    out.field_names = ["path", "in use"] + storage
+    if args.size:
+        field_names = ["path", "size", "in use"]
+        data[:, 1] = formatter(data[:, 1])
+    else:
+        field_names = ["path", "in use"]
+        data = np.delete(data, 1, axis=1)
+
+    out.field_names = field_names + storage
 
     out.align["path"] = "l"
     out.align["in use"] = "l"
+    if args.size:
+        out.align["size"] = "l"
     for name in storage:
         out.align[name] = "c"
 
